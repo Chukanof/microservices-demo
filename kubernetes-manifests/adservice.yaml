@@ -25,12 +25,14 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
-        image: gcr.io/microservices-demo-app/adservice
+        image: adservice
         ports:
         - containerPort: 9555
         env:
         - name: PORT
           value: "9555"
+        #- name: JAEGER_SERVICE_ADDR
+        #  value: "jaeger-collector:14268"
         resources:
           requests:
             cpu: 200m
@@ -39,15 +41,15 @@ spec:
             cpu: 300m
             memory: 300Mi
         readinessProbe:
-          tcpSocket:
-            port: 9555
-          initialDelaySeconds: 5
-          periodSeconds: 10
+          initialDelaySeconds: 20
+          periodSeconds: 15
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:9555"]
         livenessProbe:
-          tcpSocket:
-            port: 9555
-          initialDelaySeconds: 10
-          periodSeconds: 10
+          initialDelaySeconds: 20
+          periodSeconds: 15
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:9555"]
 ---
 apiVersion: v1
 kind: Service

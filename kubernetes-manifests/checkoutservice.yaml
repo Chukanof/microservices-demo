@@ -24,17 +24,15 @@ spec:
     spec:
       containers:
         - name: server
-          image: gcr.io/microservices-demo-app/checkoutservice
+          image: checkoutservice
           ports:
           - containerPort: 5050
           readinessProbe:
-            periodSeconds: 5
-            tcpSocket:
-              port: 5050
+            exec:
+              command: ["/bin/grpc_health_probe", "-addr=:5050"]
           livenessProbe:
-            periodSeconds: 5
-            tcpSocket:
-              port: 5050
+            exec:
+              command: ["/bin/grpc_health_probe", "-addr=:5050"]
           env:
           - name: PRODUCT_CATALOG_SERVICE_ADDR
             value: "productcatalogservice:3550"
@@ -48,6 +46,8 @@ spec:
             value: "currencyservice:7000"
           - name: CART_SERVICE_ADDR
             value: "cartservice:7070"
+          # - name: JAEGER_SERVICE_ADDR
+          #   value: "jaeger-collector:14268"
           resources:
             requests:
               cpu: 100m

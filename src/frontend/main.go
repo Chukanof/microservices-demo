@@ -23,10 +23,10 @@ import (
 
 	"cloud.google.com/go/profiler"
 	"contrib.go.opencensus.io/exporter/stackdriver"
-	"contrib.go.opencensus.io/exporter/stackdriver/monitoredresource"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"go.opencensus.io/exporter/jaeger"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/plugin/ochttp/propagation/b3"
@@ -84,7 +84,15 @@ func main() {
 	ctx := context.Background()
 	log := logrus.New()
 	log.Level = logrus.DebugLevel
-	log.Formatter = &logrus.TextFormatter{}
+	log.Formatter = &logrus.JSONFormatter{
+		FieldMap: logrus.FieldMap{
+			logrus.FieldKeyTime:  "timestamp",
+			logrus.FieldKeyLevel: "severity",
+			logrus.FieldKeyMsg:   "message",
+		},
+		TimestampFormat: time.RFC3339Nano,
+	}
+	log.Out = os.Stdout
 
 	go initProfiling(log, "frontend", "1.0.0")
 	go initTracing(log)
@@ -121,7 +129,8 @@ func main() {
 	r.HandleFunc("/logout", svc.logoutHandler).Methods(http.MethodGet)
 	r.HandleFunc("/cart/checkout", svc.placeOrderHandler).Methods(http.MethodPost)
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
-	r.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "User-agent: *\nDisallow: /") })
+	r.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "User-agent: *\nDisallow: /") })
+	r.HandleFunc("/_healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
 
 	var handler http.Handler = r
 	handler = &logHandler{log: log, next: handler} // add logging
@@ -134,7 +143,31 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr+":"+srvPort, handler))
 }
 
+func initJaegerTracing(log logrus.FieldLogger) {
+
+	svcAddr := os.Getenv("JAEGER_SERVICE_ADDR")
+	if svcAddr == "" {
+		log.Info("jaeger initialization disabled.")
+		return
+	}
+
+	// Register the Jaeger exporter to be able to retrieve
+	// the collected spans.
+	exporter, err := jaeger.NewExporter(jaeger.Options{
+		Endpoint: fmt.Sprintf("http://%s", svcAddr),
+		Process: jaeger.Process{
+			ServiceName: "frontend",
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	trace.RegisterExporter(exporter)
+	log.Info("jaeger initialization completed.")
+}
+
 func initStats(log logrus.FieldLogger, exporter *stackdriver.Exporter) {
+	view.SetReportingPeriod(60 * time.Second)
 	view.RegisterExporter(exporter)
 	if err := view.Register(ochttp.DefaultServerViews...); err != nil {
 		log.Warn("Error registering http default server views")
@@ -148,19 +181,19 @@ func initStats(log logrus.FieldLogger, exporter *stackdriver.Exporter) {
 	}
 }
 
-func initTracing(log logrus.FieldLogger) {
+func initStackdriverTracing(log logrus.FieldLogger) {
 	// TODO(ahmetb) this method is duplicated in other microservices using Go
 	// since they are not sharing packages.
 	for i := 1; i <= 3; i++ {
 		log = log.WithField("retry", i)
-		exporter, err := stackdriver.NewExporter(stackdriver.Options{
-			MonitoredResource: monitoredresource.Autodetect(),
-		})
+		exporter, err := stackdriver.NewExporter(stackdriver.Options{})
 		if err != nil {
+			// log.Warnf is used since there are multiple backends (stackdriver & jaeger)
+			// to store the traces. In production setup most likely you would use only one backend.
+			// In that case you should use log.Fatalf.
 			log.Warnf("failed to initialize stackdriver exporter: %+v", err)
 		} else {
 			trace.RegisterExporter(exporter)
-			trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
 			log.Info("registered stackdriver tracing")
 
 			// Register the views to collect server stats.
@@ -172,6 +205,18 @@ func initTracing(log logrus.FieldLogger) {
 		time.Sleep(d)
 	}
 	log.Warn("could not initialize stackdriver exporter after retrying, giving up")
+}
+
+func initTracing(log logrus.FieldLogger) {
+	// This is a demo app with low QPS. trace.AlwaysSample() is used here
+	// to make sure traces are available for observation and analysis.
+	// In a production environment or high QPS setup please use
+	// trace.ProbabilitySampler set at the desired probability.
+	trace.ApplyConfig(trace.Config{DefaultSampler: trace.AlwaysSample()})
+
+	initJaegerTracing(log)
+	initStackdriverTracing(log)
+
 }
 
 func initProfiling(log logrus.FieldLogger, service, version string) {

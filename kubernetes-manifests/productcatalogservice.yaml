@@ -25,17 +25,18 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
-        image: gcr.io/microservices-demo-app/productcatalogservice
+        image: productcatalogservice
         ports:
         - containerPort: 3550
         readinessProbe:
-          periodSeconds: 5
-          tcpSocket:
-            port: 3550
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:3550"]
         livenessProbe:
-          periodSeconds: 5
-          tcpSocket:
-            port: 3550
+          exec:
+            command: ["/bin/grpc_health_probe", "-addr=:3550"]
+#        env:
+#          - name: JAEGER_SERVICE_ADDR
+#            value: "jaeger-collector:14268"
         resources:
           requests:
             cpu: 100m
